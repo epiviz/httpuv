@@ -432,52 +432,30 @@ std::string base64encode(const Rcpp::RawVector& x) {
  *
  */
 
-#ifndef WIN32
 #include <R_ext/eventloop.h>
 
 #define UVSERVERACTIVITY 55
 #define UVLOOPACTIVITY 57
-#endif
 
 void loop_input_handler(void *data) {
-  #ifndef WIN32
   // this fake loop is here to force
   // processing events
   // deals with strange behavior in some Ubuntu installations
   for (int i=0; i < 5; ++i) {
     uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   }
-  #else
-  bool res = 1;
-  while (res) {
-    res = run(100);
-    Sleep(1);
-  }
-  #endif
 }
-
-#ifdef WIN32
-static DWORD WINAPI ServerThreadProc(LPVOID lpParameter) {
-  loop_input_handler(lpParameter);
-  return 0;
-}
-#endif
 
 class DaemonizedServer {
 public:
   uv_stream_t *_pServer;
-  #ifndef WIN32
   InputHandler *serverHandler;
   InputHandler *loopHandler;
-  #else
-  HANDLE server_thread;
-  #endif
   
   DaemonizedServer(uv_stream_t *pServer)
   : _pServer(pServer) {}
 
   ~DaemonizedServer() {
-    #ifndef WIN32
     if (loopHandler) {
       removeInputHandler(&R_InputHandlers, loopHandler);
     }
@@ -485,14 +463,6 @@ public:
     if (serverHandler) {
       removeInputHandler(&R_InputHandlers, serverHandler);
     }
-    #else 
-      if (server_thread) {
-        DWORD ts = 0;
-        if (GetExitCodeThread(server_thread, &ts) && ts == STILL_ACTIVE)
-          TerminateThread(server_thread, 0);
-        server_thread = 0;
-      }
-    #endif
     
     if (_pServer) {
       freeServer(_pServer);
@@ -507,22 +477,11 @@ Rcpp::RObject daemonize(std::string handle) {
   uv_stream_t *pServer = internalize<uv_stream_t >(handle);
   DaemonizedServer *dServer = new DaemonizedServer(pServer);
 
-   #ifndef WIN32
    int fd = pServer->io_watcher.fd;
    dServer->serverHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVSERVERACTIVITY);
 
    fd = uv_backend_fd(uv_default_loop());
    dServer->loopHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVLOOPACTIVITY);
-   #else
-   if (dServer->server_thread) {
-     DWORD ts = 0;
-     if (GetExitCodeThread(dServer->server_thread, &ts) && ts == STILL_ACTIVE)
-       TerminateThread(dServer->server_thread, 0);
-     dServer->server_thread = 0;
-   }
-   dServer->server_thread = CreateThread(NULL, 0, ServerThreadProc, 0, 0, 0);
-   #endif
-
   return Rcpp::wrap(externalize(dServer));
 }
 
@@ -532,6 +491,10 @@ void destroyDaemonizedServer(std::string handle) {
   delete dServer;
 }
 
+/*
+ * end daemonizeation code
+ */
+ 
 static std::string allowed = ";,/?:@&=+$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-_.!~*'()";
 
 bool isReservedUrlChar(char c) {
