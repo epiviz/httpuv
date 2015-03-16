@@ -506,11 +506,12 @@ Rcpp::RObject daemonize(std::string handle) {
   DaemonizedServer *dServer = new DaemonizedServer(pServer);
 
    #ifndef WIN32
-   int fd = pServer->io_watcher.fd;
-   dServer->serverHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVSERVERACTIVITY);
+   int server_fd;
+   uv_fileno(toHandle(pServer), &server_fd);
+   dServer->serverHandler = addInputHandler(R_InputHandlers, server_fd, &loop_input_handler, UVSERVERACTIVITY);
 
-   fd = uv_backend_fd(uv_default_loop());
-   dServer->loopHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVLOOPACTIVITY);
+   int backend_fd = uv_backend_fd(uv_default_loop());
+   dServer->loopHandler = addInputHandler(R_InputHandlers, backend_fd, &loop_input_handler, UVLOOPACTIVITY);
    #else
    if (dServer->server_thread) {
      DWORD ts = 0;
