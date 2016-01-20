@@ -457,13 +457,14 @@ void loop_input_handler(void *data) {
 }
 
 #ifdef WIN32
+#define WM_BACKGROUND_CALLBACK ( WM_USER + 1 )
 static HWND message_window;
 static DWORD WINAPI ServerThreadProc(LPVOID lpParameter) {
   loop_input_handler(lpParameter);
   return 0;
 }
-static LRESULT CALLBACK BackgroundWindowProc(HWND hwnd, UNINT uMsg, WPARAM wParam, LPARAM lParam) {
-  if (hwnd == message_window && uMsg = WM_BACKGROUND_CALLBACK_CALLBACK) {
+static LRESULT CALLBACK BackgroundWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+  if (hwnd == message_window && uMsg == WM_BACKGROUND_CALLBACK) {
     uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     return 0;
   }
@@ -489,10 +490,10 @@ public:
      */
     #ifdef WIN32
     HINSTANCE instance = GetModuleHandle(NULL);
-    LPCTSTR class = "background";
-    WNDCLASS wndclass = { 0, BackgroundWindowProc, 0, 0, instance, NULL, 0, 0, NULL, class };
+    LPCTSTR wnd_class_name = "background";
+    WNDCLASS wndclass = { 0, BackgroundWindowProc, 0, 0, instance, NULL, 0, 0, NULL, wnd_class_name };
     RegisterClass(&wndclass);
-    message_window = CreateWindow(class, "background", 0, 1, 1, 1, 1, HWND_MESSAGE, NULL, instance, NULL);
+    message_window = CreateWindow(wnd_class_name, "background", 0, 1, 1, 1, 1, HWND_MESSAGE, NULL, instance, NULL);
     #endif
   }
 
