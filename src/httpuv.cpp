@@ -449,53 +449,37 @@ void loop_input_handler(void *data) {
   }
   #else
   bool res = 1;
-  while (res) {
+//  while (res) {
     res = run(100);
     Sleep(1);
-  }
+  //}
   #endif
 }
 
 #ifdef WIN32
-#define WM_BACKGROUND_CALLBACK ( WM_USER + 1 )
+#define WM_LIBUV_CALLBACK ( WM_USER + 1 )
 static HWND message_window;
-static DWORD WINAPI ServerThreadProc(LPVOID lpParameter) {
-  loop_input_handler(lpParameter);
-  return 0;
-}
-static LRESULT CALLBACK BackgroundWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-  if (hwnd == message_window && uMsg == WM_BACKGROUND_CALLBACK) {
-    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    return 0;
-  }
-  return DefWindowProc(hwnd, uMsg, wParam, lParam);
-}
+static LRESULT CALLBACK LibuvWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+#ifndef HWND_MESSAGE
+#define HWND_MESSAGE ((HWND)-3)
+#endif
 #endif
 
 class DaemonizedServer {
 public:
   uv_stream_t *_pServer;
+  int needs_init;
+  int in_process;
+  
   #ifndef WIN32
   InputHandler *serverHandler;
   InputHandler *loopHandler;
   #else
-  HANDLE server_thread;
+  HANDLE thread;
   #endif
   
   DaemonizedServer(uv_stream_t *pServer)
-  : _pServer(pServer) {
-    
-    /* create dummy message-only window for synchronization with the main
-     * event loop
-     */
-    #ifdef WIN32
-    HINSTANCE instance = GetModuleHandle(NULL);
-    LPCTSTR wnd_class_name = "background";
-    WNDCLASS wndclass = { 0, BackgroundWindowProc, 0, 0, instance, NULL, 0, 0, NULL, wnd_class_name };
-    RegisterClass(&wndclass);
-    message_window = CreateWindow(wnd_class_name, "background", 0, 1, 1, 1, 1, HWND_MESSAGE, NULL, instance, NULL);
-    #endif
-  }
+  : _pServer(pServer), needs_init(1), in_process(0) {}
 
   ~DaemonizedServer() {
     #ifndef WIN32
@@ -507,11 +491,11 @@ public:
       removeInputHandler(&R_InputHandlers, serverHandler);
     }
     #else 
-      if (server_thread) {
+      if (thread) {
         DWORD ts = 0;
-        if (GetExitCodeThread(server_thread, &ts) && ts == STILL_ACTIVE)
-          TerminateThread(server_thread, 0);
-        server_thread = 0;
+        if (GetExitCodeThread(thread, &ts) && ts == STILL_ACTIVE)
+          TerminateThread(thread, 0);
+        thread = 0;
       }
     #endif
     
@@ -519,29 +503,99 @@ public:
       freeServer(_pServer);
     }
   }
+  
   void setup(){
+#ifdef WIN32
+    HINSTANCE instance = GetModuleHandle(NULL);
+    LPCTSTR window_class = "libuv";
+    WNDCLASS wndclass = { 0, LibuvWindowProc, 0, 0, instance, NULL, 0, 0, NULL, window_class };
+    RegisterClass(&wndclass);
+    message_window = CreateWindow(window_class, "libuv", 0, 1, 1, 1, 1, HWND_MESSAGE, NULL, instance, NULL);
+#endif
+    needs_init = 0;
   };
 };
+
+#ifdef WIN32
+static void run_libuv_main_thread(DaemonizedServer *dServer);
+
+static void run_libuv(DaemonizedServer *dServer)
+{
+  SendMessage(message_window, WM_LIBUV_CALLBACK, 0, (LPARAM) dServer);
+}
+#define run_libuv run_libuv_main_thread
+#endif
+
+static void run_libuv_(void *ptr)
+{
+  DaemonizedServer *dServer = (DaemonizedServer *) ptr;
+  // this fake loop is here to force
+  // processing events
+  // deals with strange behavior in some Ubuntu installations
+  for (int i=0; i < 5; ++i) {
+    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+  }
+}
+
+static void run_libuv(DaemonizedServer *dServer)
+{
+  if (dServer->in_process) return;
+  dServer->in_process = 1;
+  run_libuv_((void *) dServer);
+  dServer->in_process = 0;
+}
+
+#ifdef WIN32
+#undef run_libuv
+#endif
+
+static void libuv_input_handler(void *data);
+
+#ifdef WIN32
+static LRESULT CALLBACK LibuvWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+  if (hwnd == message_window && uMsg == WM_LIBUV_CALLBACK) {
+    DaemonizedServer *dServer = (DaemonizedServer *) lParam;
+    run_libuv_main_thread(dServer);
+    return 0;
+  }
+  return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+static DWORD WINAPI LibuvThreadProc(LPVOID lpParameter)
+{
+  DaemonizedServer *dServer = (DaemonizedServer *) lpParameter;
+  if (!dServer) return 0;
+  
+  return 0;
+}
+#endif
+
+static void libuv_input_handler(void *data)
+{
+  run_libuv((DaemonizedServer *) data);
+}
 
 // [[Rcpp::export]]
 Rcpp::RObject daemonize(std::string handle) {
   uv_stream_t *pServer = internalize<uv_stream_t >(handle);
   DaemonizedServer *dServer = new DaemonizedServer(pServer);
-
+  if (dServer->needs_init) { dServer->setup(); }
+  
    #ifndef WIN32
    int fd = pServer->io_watcher.fd;
-   dServer->serverHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVSERVERACTIVITY);
+   dServer->serverHandler = addInputHandler(R_InputHandlers, fd, &libuv_input_handler, UVSERVERACTIVITY);
 
    fd = uv_backend_fd(uv_default_loop());
-   dServer->loopHandler = addInputHandler(R_InputHandlers, fd, &loop_input_handler, UVLOOPACTIVITY);
+   dServer->loopHandler = addInputHandler(R_InputHandlers, fd, &libuv_input_handler, UVLOOPACTIVITY);
    #else
-   if (dServer->server_thread) {
+   if (dServer->thread) {
      DWORD ts = 0;
-     if (GetExitCodeThread(dServer->server_thread, &ts) && ts == STILL_ACTIVE)
-       TerminateThread(dServer->server_thread, 0);
-     dServer->server_thread = 0;
+     if (GetExitCodeThread(dServer->thread, &ts) && ts == STILL_ACTIVE)
+       TerminateThread(dServer->thread, 0);
+     dServer->thread = 0;
    }
-   dServer->server_thread = CreateThread(NULL, 0, ServerThreadProc, 0, 0, 0);
+   dServer->thread = CreateThread(NULL, 0, LibuvThreadProc, (LPVOID) dServer, 0, 0);
    #endif
 
   return Rcpp::wrap(externalize(dServer));
@@ -552,6 +606,8 @@ void destroyDaemonizedServer(std::string handle) {
   DaemonizedServer *dServer = internalize<DaemonizedServer >(handle);
   delete dServer;
 }
+
+//// END OF DAEMONIZATION CODE
 
 static std::string allowed = ";,/?:@&=+$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-_.!~*'()";
 
