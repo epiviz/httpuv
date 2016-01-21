@@ -532,17 +532,21 @@ static void run_libuv_(void *ptr)
   // this fake loop is here to force
   // processing events
   // deals with strange behavior in some Ubuntu installations
+  Rprintf("ready to run libuv default loop\n");
   for (int i=0; i < 5; ++i) {
     uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   }
+  Rprintf("done running libuv default loop\n");
 }
 
 static void run_libuv(DaemonizedServer *dServer)
 {
+  Rprintf("enterd run_libuv");
   if (dServer->in_process) return;
   dServer->in_process = 1;
   run_libuv_((void *) dServer);
   dServer->in_process = 0;
+  Rprintf("exiting run_libuv");
 }
 
 #ifdef WIN32
@@ -573,21 +577,30 @@ static DWORD WINAPI LibuvThreadProc(LPVOID lpParameter)
 
 static void libuv_input_handler(void *data)
 {
+  Rprintf("Entered libuv_input_handler\n");
   run_libuv((DaemonizedServer *) data);
+  Rprintf("Exiting libuv_input_handler\n");
 }
 
 // [[Rcpp::export]]
 Rcpp::RObject daemonize(std::string handle) {
+  Rprintf("Entered daemonize function\n");
   uv_stream_t *pServer = internalize<uv_stream_t >(handle);
   DaemonizedServer *dServer = new DaemonizedServer(pServer);
+  Rprintf("server object constructed\n");
   if (dServer->needs_init) { dServer->setup(); }
+  Rprintf("server object setup\n");
   
    #ifndef WIN32
+  Rprintf("adding input handlers\n");
    int fd = pServer->io_watcher.fd;
    dServer->serverHandler = addInputHandler(R_InputHandlers, fd, &libuv_input_handler, UVSERVERACTIVITY);
+   if (dServer->serverHandler) dServer->serverHandler->userData = dServer;
 
    fd = uv_backend_fd(uv_default_loop());
    dServer->loopHandler = addInputHandler(R_InputHandlers, fd, &libuv_input_handler, UVLOOPACTIVITY);
+   if (dServer->loopHandler) dServer->loopHandler->userData = dServer;
+   Rprintf("input handlers added\n");
    #else
    if (dServer->thread) {
      DWORD ts = 0;
@@ -598,12 +611,14 @@ Rcpp::RObject daemonize(std::string handle) {
    dServer->thread = CreateThread(NULL, 0, LibuvThreadProc, (LPVOID) dServer, 0, 0);
    #endif
 
+   Rprintf("daemonize function done\n");
   return Rcpp::wrap(externalize(dServer));
 }
 
 // [[Rcpp::export]]
 void destroyDaemonizedServer(std::string handle) {
   DaemonizedServer *dServer = internalize<DaemonizedServer >(handle);
+  Rprintf("deleting daemonized server");
   delete dServer;
 }
 
