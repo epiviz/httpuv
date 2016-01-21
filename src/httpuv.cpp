@@ -506,11 +506,13 @@ public:
   
   void setup(){
 #ifdef WIN32
+    Rprintf("setting up message window\n");
     HINSTANCE instance = GetModuleHandle(NULL);
     LPCTSTR window_class = "libuv";
     WNDCLASS wndclass = { 0, LibuvWindowProc, 0, 0, instance, NULL, 0, 0, NULL, window_class };
     RegisterClass(&wndclass);
     message_window = CreateWindow(window_class, "libuv", 0, 1, 1, 1, 1, HWND_MESSAGE, NULL, instance, NULL);
+    Rprintf("done creating message window\n");
 #endif
     needs_init = 0;
   };
@@ -521,7 +523,9 @@ static void run_libuv_main_thread(DaemonizedServer *dServer);
 
 static void run_libuv(DaemonizedServer *dServer)
 {
+  Rprintf("sending message to window\n");
   SendMessage(message_window, WM_LIBUV_CALLBACK, 0, (LPARAM) dServer);
+  Rprintf("sent message to window\n");
 }
 #define run_libuv run_libuv_main_thread
 #endif
@@ -558,19 +562,29 @@ static void libuv_input_handler(void *data);
 #ifdef WIN32
 static LRESULT CALLBACK LibuvWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  Rprintf("entered LibuvWindowProc\n");
   if (hwnd == message_window && uMsg == WM_LIBUV_CALLBACK) {
     DaemonizedServer *dServer = (DaemonizedServer *) lParam;
+    Rprintf("calling run_libuv_main_thread\n");
     run_libuv_main_thread(dServer);
+    Rprintf("retured from run_libuv_main_thread\n");
     return 0;
   }
+  Rprintf("exiting LibuvWindowProc\n");
   return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 static DWORD WINAPI LibuvThreadProc(LPVOID lpParameter)
 {
+  Rprintf("entered LibuvThreadProc\n");
   DaemonizedServer *dServer = (DaemonizedServer *) lpParameter;
   if (!dServer) return 0;
   
+  while (true) {
+    run_libuv(dServer);
+    Sleep(1);
+  }
+  Rprintf("exiting LibuvThreadProc\n");
   return 0;
 }
 #endif
@@ -608,7 +622,9 @@ Rcpp::RObject daemonize(std::string handle) {
        TerminateThread(dServer->thread, 0);
      dServer->thread = 0;
    }
+   Rprintf("creating libuv thread\n");
    dServer->thread = CreateThread(NULL, 0, LibuvThreadProc, (LPVOID) dServer, 0, 0);
+   Rprintf("created libuv thread\n");
    #endif
 
    Rprintf("daemonize function done\n");
