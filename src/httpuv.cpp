@@ -427,8 +427,8 @@ std::string base64encode(const Rcpp::RawVector& x) {
  * exposed by the uv_default_loop to trigger uv_run whenever necessary. It uses the non-blocking version
  * of uv_run (UV_RUN_NOWAIT).
  *
- * On Windows: creates a thread that runs the libuv default loop. It uses the usual "service" mechanism
- * on the new thread (it uses the run function defined above). TODO: check synchronization. 
+ * On Windows: creates a thread that runs the libuv default loop using non-blocking version of uv_run (UV_RUN_NOWAIT). 
+ * *
  *
  */
 
@@ -439,22 +439,6 @@ std::string base64encode(const Rcpp::RawVector& x) {
 #define UVLOOPACTIVITY 57
 #endif
 
-void loop_input_handler(void *data) {
-  #ifndef WIN32
-  // this fake loop is here to force
-  // processing events
-  // deals with strange behavior in some Ubuntu installations
-  for (int i=0; i < 5; ++i) {
-    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-  }
-  #else
-  bool res = 1;
-//  while (res) {
-    res = run(100);
-    Sleep(1);
-  //}
-  #endif
-}
 
 #ifdef WIN32
 #define WM_LIBUV_CALLBACK ( WM_USER + 1 )
@@ -581,7 +565,9 @@ static DWORD WINAPI LibuvThreadProc(LPVOID lpParameter)
   if (!dServer) return 0;
   
   while (true) {
+    Rprintf("calling run_libuv from LibuvThreadProc\n");
     run_libuv(dServer);
+    Rprintf("done run_libuv from LibuvThreadProc\n");
     Sleep(1);
   }
   Rprintf("exiting LibuvThreadProc\n");
